@@ -31,16 +31,27 @@ func main() {
 
 	ctx := context.Background()
 
-	client := github.NewClient(nil).WithAuthToken(os.Getenv("GITHUB_TOKEN"))
+	client := github.NewClient(nil).WithAuthToken(os.Getenv("GITHUB_TOKEN")).Organizations
 
-	packages, _, err := client.Organizations.ListPackages(ctx, org, &github.PackageListOptions{
+	packageOpt := &github.PackageListOptions{
+		ListOptions: github.ListOptions{PerPage: 10},
 		Visibility:  github.String(visibility),
 		PackageType: github.String("container"),
 		State:       github.String(state),
-	})
+	}
 
-	if err != nil {
-		printError(err)
+	var packages []*github.Package
+	for {
+		packagePage, packageResp, err := client.ListPackages(ctx, org, packageOpt)
+		if err != nil {
+			printError(err)
+		}
+
+		packages = append(packages, packagePage...)
+		if packageResp.NextPage == 0 {
+			break
+		}
+		packageOpt.Page = packageResp.NextPage
 	}
 
 	for _, p := range packages {
@@ -50,33 +61,65 @@ func main() {
 
 		fmt.Printf("%s:\n", p.GetName())
 
-		versions, _, err := client.Organizations.PackageGetAllVersions(ctx, org, *p.PackageType, *p.Name, &github.PackageListOptions{
+		versionOpt := &github.PackageListOptions{
+			ListOptions: github.ListOptions{PerPage: 10},
 			Visibility:  github.String(visibility),
 			PackageType: p.PackageType,
 			State:       github.String(state),
-		})
-		if err != nil {
-			printError(err)
+		}
+
+		var versions []*github.PackageVersion
+		for {
+			versionPage, versionResp, err := client.PackageGetAllVersions(ctx, org, p.GetPackageType(), p.GetName(), versionOpt)
+			if err != nil {
+				printError(err)
+			}
+
+			versions = append(versions, versionPage...)
+			if versionResp.NextPage == 0 {
+				break
+			}
+
+			versionOpt.Page = versionResp.NextPage
 		}
 
 		for _, v := range versions {
+			version := v.GetID()
 			tags := v.GetMetadata().GetContainer().Tags
+
+			// look for pr- tags
 			for _, t := range tags {
 				if !strings.HasPrefix(t, "pr-") {
 					continue
 				}
 
-				fmt.Printf("Deleting: %q\n", t)
+				fmt.Printf("Deleting: %q (%d)\n", t, v.GetID())
 
-				_, err = client.Organizations.PackageDeleteVersion(ctx, org, *p.PackageType, *p.Name, v.GetID())
+				err := delete(ctx, client, p.GetPackageType(), p.GetName(), version)
+				if err != nil {
+					printError(err)
+				}
+				break
+			}
+
+			// clean-up untagged
+			if len(tags) == 0 {
+				fmt.Printf("untagged: %d\n", v.GetID())
+				err := delete(ctx, client, p.GetPackageType(), p.GetName(), version)
 				if err != nil {
 					printError(err)
 				}
 			}
+
 		}
 
 		fmt.Println("")
 	}
+}
+
+func delete(ctx context.Context, client *github.OrganizationsService, packageType, packageName string, version int64) error {
+	_, err := client.PackageDeleteVersion(ctx, org, packageType, packageName, version)
+	return err
 }
 
 func missingFlag(flagName string) {
