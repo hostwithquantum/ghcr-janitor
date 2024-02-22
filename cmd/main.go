@@ -33,8 +33,6 @@ func main() {
 
 	client := github.NewClient(nil).WithAuthToken(os.Getenv("GITHUB_TOKEN"))
 
-	org := "hostwithquantum"
-
 	packages, _, err := client.Organizations.ListPackages(ctx, org, &github.PackageListOptions{
 		Visibility:  github.String(visibility),
 		PackageType: github.String("container"),
